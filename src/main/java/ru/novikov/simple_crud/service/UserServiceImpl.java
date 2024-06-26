@@ -62,9 +62,4 @@ public class UserServiceImpl implements UserService{
             throw new UserNotFoundException("User with id = " + id + "not found");
         }
     }
-
-    @Override
-    public long countRows() {
-        return userRepository.count();
-    }
 }

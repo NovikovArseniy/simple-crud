@@ -9,5 +9,4 @@ public interface UserService {
     User updateUser(User user) throws UserNotFoundException;
     void deleteUser(long id) throws UserNotFoundException;
     User getUserById(long id) throws UserNotFoundException;
-    long countRows();
 }

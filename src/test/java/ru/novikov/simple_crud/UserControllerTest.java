@@ -6,64 +6,63 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
-import ru.novikov.simple_crud.exceptions.UserIsAlreadyExistsException;
-import ru.novikov.simple_crud.exceptions.UserNotFoundException;
 import ru.novikov.simple_crud.model.User;
-import ru.novikov.simple_crud.service.UserService;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT;
 
 @Slf4j
 @ExtendWith(SpringExtension.class)
-@SpringBootTest
-public class UserServiceTest {
-
-    @Autowired
-    UserService userService;
-
+@SpringBootTest(webEnvironment = RANDOM_PORT)
+public class UserControllerTest {
+    @LocalServerPort
+    int randomServerPort;
+    @Autowired TestRestTemplate restTemplate;
     @Test
     public void createOneHundredThousandsUsers(){
-        AtomicInteger createdUsersCounter = new AtomicInteger();
         int numberOfCreations = 100000;
+        AtomicInteger counterOfCreations= new AtomicInteger();
         CountDownLatch latch = new CountDownLatch(numberOfCreations);
         Runnable getUser = () -> {
             User user = createRandomUser();
-            try {
-                user = userService.createUser(user);
-                if (user != null){
-                    createdUsersCounter.incrementAndGet();
-                }
-            } catch (UserIsAlreadyExistsException e){
-                log.error("User is already exists");
+            ResponseEntity<User> response = getUserResponseEntity(user);
+            if(response.getStatusCode() == HttpStatus.OK){
+                counterOfCreations.incrementAndGet();
             }
             latch.countDown();
         };
-        ExecutorService service = Executors.newFixedThreadPool(8);
+        ExecutorService executorService = Executors.newFixedThreadPool(8);
+
         for (int i = 0; i < numberOfCreations; i++) {
-            service.submit(getUser);
+            executorService.submit(getUser);
         }
         try {
             latch.await();
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-        Assertions.assertEquals(numberOfCreations, createdUsersCounter.get());
+        Assertions.assertEquals(numberOfCreations, counterOfCreations.get());
     }
 
     @Test
     public void doMultipleReadingsWithMultipleConnections(){
         for (int i = 0; i < 100000; i++) {
             User user = createRandomUser();
-            try {
-                userService.createUser(user);
-            } catch (UserIsAlreadyExistsException e){
-                log.error("User is already exists");
-            }
+                getUserResponseEntity(user);
         }
         List<Long> readingTimes = new ArrayList<>();
         AtomicInteger countReadings = new AtomicInteger();
@@ -73,33 +72,32 @@ public class UserServiceTest {
         ExecutorService executorService = Executors.newFixedThreadPool(connectionNumber);
         Runnable getRandomUserById = ()->{
             for (int i = 0; i < expectedCountReadings/connectionNumber; i++){
-                User user = null;
-                try {
-                    long startTime = System.nanoTime();
-                    user = userService.getUserById((long) (Math.random() * 100000 + 1));
-                    long endTime = System.nanoTime();
-                    long timeReading = endTime - startTime;
-                    readingTimes.add(timeReading);
-                } catch (UserNotFoundException e){
-                    System.out.println("User not found");
-                }
-                if (user!= null){
+                long startTime = System.nanoTime();
+                long randomId = (long) (Math.random() * 100000 + 1);
+                ResponseEntity<User> response = restTemplate.getForEntity("http://localhost:" + randomServerPort + "/api/getUser?id=" + randomId, User.class);
+                long endTime = System.nanoTime();
+                long timeReading = endTime - startTime;
+                readingTimes.add(timeReading);
+                if (response.getStatusCode() == HttpStatus.OK){
                     countReadings.incrementAndGet();
                 }
                 latch.countDown();
             }
         };
+
         for (int i = 0; i < connectionNumber; i++) {
             executorService.execute(getRandomUserById);
         }
+
         try {
             latch.await();
             executorService.shutdown();
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
+
         Assertions.assertEquals(expectedCountReadings, countReadings.get());
-        log.info("total time = " + (Long) readingTimes.stream().mapToLong(Long::longValue).sum() + " ns");
+        log.info("total time = " + readingTimes.stream().mapToLong(Long::longValue).sum() + " ns");
         log.info("median time = " + readingTimes.stream().sorted().toList().get(readingTimes.size()/2)+ " ns");
         int lastElem = readingTimes.size() * 99 / 100;
         log.info("99s percentile = " + readingTimes.stream()
@@ -113,8 +111,15 @@ public class UserServiceTest {
                 .toList()
                 .subList(0, lastElem)
                 .get(lastElem - 1)+ " ns");
-
     }
+    private ResponseEntity<User> getUserResponseEntity(User user) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Content-Type", "application/json");
+        HttpEntity<User> request = new HttpEntity<>(user, headers);
+        ResponseEntity<User> response = restTemplate.postForEntity("http://localhost:" + randomServerPort + "/api/createUser", request, User.class);
+        return response;
+    }
+
     private User createRandomUser() {
         User user = new User();
         user.setName(generateRandomString());
