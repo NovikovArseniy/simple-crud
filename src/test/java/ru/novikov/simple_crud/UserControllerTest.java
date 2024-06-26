@@ -60,20 +60,33 @@ public class UserControllerTest {
 
     @Test
     public void doMultipleReadingsWithMultipleConnections(){
-        for (int i = 0; i < 100000; i++) {
+        int numberOfCreations = 100000;
+        CountDownLatch latch = new CountDownLatch(numberOfCreations);
+        Runnable getUser = () -> {
             User user = createRandomUser();
-                getUserResponseEntity(user);
+            getUserResponseEntity(user);
+            latch.countDown();
+        };
+        ExecutorService executorService = Executors.newFixedThreadPool(8);
+
+        for (int i = 0; i < numberOfCreations; i++) {
+            executorService.submit(getUser);
+        }
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
         List<Long> readingTimes = new ArrayList<>();
         AtomicInteger countReadings = new AtomicInteger();
         int expectedCountReadings = 1000000;
-        CountDownLatch latch = new CountDownLatch(expectedCountReadings);
+        CountDownLatch latch1 = new CountDownLatch(expectedCountReadings);
         int connectionNumber = 100;
-        ExecutorService executorService = Executors.newFixedThreadPool(connectionNumber);
+        executorService = Executors.newFixedThreadPool(connectionNumber);
         Runnable getRandomUserById = ()->{
             for (int i = 0; i < expectedCountReadings/connectionNumber; i++){
                 long startTime = System.nanoTime();
-                long randomId = (long) (Math.random() * 100000 + 1);
+                long randomId = (long) (Math.random() * numberOfCreations + 1);
                 ResponseEntity<User> response = restTemplate.getForEntity("http://localhost:" + randomServerPort + "/api/getUser?id=" + randomId, User.class);
                 long endTime = System.nanoTime();
                 long timeReading = endTime - startTime;
@@ -81,7 +94,7 @@ public class UserControllerTest {
                 if (response.getStatusCode() == HttpStatus.OK){
                     countReadings.incrementAndGet();
                 }
-                latch.countDown();
+                latch1.countDown();
             }
         };
 
@@ -90,7 +103,7 @@ public class UserControllerTest {
         }
 
         try {
-            latch.await();
+            latch1.await();
             executorService.shutdown();
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
